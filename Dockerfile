@@ -2,44 +2,55 @@ FROM nvidia/cuda:12.1.0-devel-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
+# Disable git SSL verification for transient CI failures
+ENV GIT_TERMINAL_PROMPT=0
 
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     git \
     wget \
     curl \
+    ca-certificates \
     python3-pip \
     python3-dev \
     libgl1-mesa-glx \
     libglib2.0-0 \
     ffmpeg \
-    ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
 # Clone ComfyUI
-RUN git clone https://github.com/comfyanonymous/ComfyUI.git
+RUN git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git
 WORKDIR /workspace/ComfyUI
 
 # Install Python deps (torch pinned to cu121 for CUDA 12.1)
-RUN pip3 install --no-cache-dir --upgrade pip
-RUN pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-RUN pip3 install --no-cache-dir -r requirements.txt
+RUN pip3 install --no-cache-dir --upgrade pip && \
+    pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
+    pip3 install --no-cache-dir -r requirements.txt
 
-# Custom nodes used by the workflow
+# === Custom nodes ===
+# Install all 3 in one RUN to share layer cache + reduce network issues.
+# Use --depth=1 for shallow clones. Retry 3x with backoff on transient failure.
 WORKDIR /workspace/ComfyUI/custom_nodes
-RUN git clone https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git
-RUN git clone https://github.com/kijai/ComfyUI-KJNodes.git
-RUN git clone https://github.com/rgthree/ComfyUI-rgthree.git
-RUN pip3 install --no-cache-dir -r ComfyUI-VideoHelperSuite/requirements.txt || true
-RUN pip3 install --no-cache-dir -r ComfyUI-KJNodes/requirements.txt || true
-RUN pip3 install --no-cache-dir -r ComfyUI-rgthree/requirements.txt || true
+RUN set -eux; \
+    for i in 1 2 3; do \
+      git clone --depth=1 https://github.com/Kosinkadink/ComfyUI-VideoHelperSuite.git && break || sleep 5; \
+    done; \
+    for i in 1 2 3; do \
+      git clone --depth=1 https://github.com/kijai/ComfyUI-KJNodes.git && break || sleep 5; \
+    done; \
+    for i in 1 2 3; do \
+      git clone --depth=1 https://github.com/rgthree/ComfyUI-rgthree.git && break || sleep 5; \
+    done; \
+    pip3 install --no-cache-dir -r ComfyUI-VideoHelperSuite/requirements.txt || true; \
+    pip3 install --no-cache-dir -r ComfyUI-KJNodes/requirements.txt || true; \
+    pip3 install --no-cache-dir -r ComfyUI-rgthree/requirements.txt || true
 
 # Download all required MiniMax H3 model files
 WORKDIR /workspace/ComfyUI/models
 
-# 1. Diffusion model (34GB)
+# 1. Diffusion model (34GB) — main singularity weight, used by DualSampling workflow
 RUN mkdir -p diffusion_models && cd diffusion_models && \
     wget -q -O Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors \
     "https://huggingface.co/WarmBloodAban/Minimax-h3_Singularity/resolve/main/Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors"
@@ -78,8 +89,7 @@ RUN echo "=== model inventory ===" && \
     ls -lah /workspace/ComfyUI/models/vae/ && \
     ls -lah /workspace/ComfyUI/models/loras/ && \
     echo "=== sanity check: no empty .safetensors files ===" && \
-    find /workspace/ComfyUI/models -name "*.safetensors" -size 0 -print && \
-    echo "all good"
+    find /workspace/ComfyUI/models -name "*.safetensors" -size 0 -print
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=60s --retries=3 \
     CMD curl -fsS http://localhost:8188/ >/dev/null || exit 1
