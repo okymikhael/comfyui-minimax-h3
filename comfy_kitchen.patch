@@ -1,0 +1,46 @@
+--- a/usr/local/lib/python3.10/dist-packages/comfy_kitchen/backends/eager/conv3d.py
++++ b/usr/local/lib/python3.10/dist-packages/comfy_kitchen/backends/eager/conv3d.py
+@@ -1,6 +1,7 @@
+ # SPDX-FileCopyrightText: Copyright (c) 2025 Comfy Org. All rights reserved.
+ # SPDX-License-Identifier: Apache-2.0
+ 
++from typing import List
+ import torch
+ from torch import Tensor
+ from torch.nn import functional
+@@ -13,7 +14,7 @@
+     weight: Tensor,
+     bias: Tensor | None,
+     residual: Tensor | None,
+-    stride: list[int],
++    stride: List[int],
+ ) -> Tensor:
+     """3D conv with zero padding plus an optional residual add (torch's
+     accumulate mode; the CUDA backend accumulates in fp16)."""
+@@ -27,7 +28,7 @@
+     weight: Tensor,
+     bias: Tensor | None,
+     residual: Tensor | None,
+-    stride: list[int],
++    stride: List[int],
+     out: Tensor,
+ ) -> None:
+     """fp16_conv3d written into ``out``, an NDHWC-ordered tensor or view of the output shape."""
+@@ -40,7 +41,7 @@
+     weight: torch.Tensor,
+     bias: torch.Tensor | None,
+     residual: torch.Tensor | None,
+-    stride: list[int],
++    stride: List[int],
+     out: torch.Tensor,
+ ) -> None:
+     # copy_ would broadcast or cast into a mismatched buffer instead of failing
+@@ -66,7 +67,7 @@
+     weight: torch.Tensor,
+     bias: torch.Tensor | None,
+     residual: torch.Tensor | None,
+-    stride: list[int],
++    stride: List[int],
+ ) -> torch.Tensor:
+     kwargs = {"x": x, "weight": weight, "bias": bias, "residual": residual, "stride": stride}
+     impl = registry.get_implementation("fp16_conv3d", kwargs=kwargs)

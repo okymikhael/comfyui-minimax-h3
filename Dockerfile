@@ -28,6 +28,35 @@ RUN pip3 install --no-cache-dir --upgrade pip && \
     pip3 install --no-cache-dir torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121 && \
     pip3 install --no-cache-dir -r requirements.txt
 
+# === Patch comfy_kitchen (transitive dep of ComfyUI) ===========================
+# comfy-kitchen==0.2.35 uses PEP585 builtin generics like `list[int]` in
+# `backends/eager/conv3d.py`, which `torch.library.infer_schema` does not accept
+# on torch 2.x stable (cu121). Replace with `typing.List[int]` at the install
+# site. Idempotent — no-op if already fixed by a future upstream release.
+# See /tmp/comfyui-push/comfy_kitchen.patch for the record diff.
+RUN CK_PATH="$(python3 -c 'import comfy_kitchen, os; print(os.path.join(os.path.dirname(comfy_kitchen.__file__), "backends", "eager", "conv3d.py"))')" && \
+    echo "[patch] comfy_kitchen file: $CK_PATH" && \
+    python3 - <<'PY'
+import os, re, sys
+import comfy_kitchen
+p = os.path.join(os.path.dirname(comfy_kitchen.__file__), "backends", "eager", "conv3d.py")
+src = open(p).read()
+orig = src
+# 1) Ensure `from typing import List` is present
+if "from typing import List" not in src:
+    if "import torch\n" in src:
+        src = src.replace("import torch\n", "from typing import List\nimport torch\n", 1)
+    else:
+        src = "from typing import List\n" + src
+# 2) Replace PEP585 `list[int]` / `list[bool]` / `list[str]` with `List[...]`
+src = re.sub(r"\blist\[(int|bool|str|float)\]", r"List[\1]", src)
+if src != orig:
+    open(p, "w").write(src)
+    print(f"[patch] patched: {p}")
+else:
+    print(f"[patch] no change needed: {p}")
+PY
+
 # === Custom nodes ===
 # Install all 3 in one RUN to share layer cache + reduce network issues.
 # Use --depth 1 for shallow clone. Retry 3x with backoff on transient failure.
