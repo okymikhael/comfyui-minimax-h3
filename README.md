@@ -1,72 +1,124 @@
-# MiniMax-H3 ComfyUI Stack (shahzaib632_okymikhael)
+# ComfyUI + MiniMax-H3 Singularity
 
-ComfyUI + custom nodes + the MiniMax H3 Singularity DualSampling workflow. Models are **fetched on first container start** from HuggingFace CDN — keeps the image small (~15 GB) and lets it build on free runners.
+Production-ready ComfyUI image with the MiniMax-H3 video generation stack, including custom node fixes and on-demand model download. Tested and verified working on NVIDIA A40 / RTX A6000 / L40S (RunPod).
 
-## Contents
+## What it is
 
-| File | Purpose |
-|---|---|
-| `Dockerfile` | `nvidia/cuda:12.1.0-devel-ubuntu22.04` base; installs ComfyUI + 3 custom nodes; ~15 GB final image |
-| `download-models.sh` | Runtime script — fetches all 7 model files (~66 GB) from HuggingFace on first boot |
-| `entrypoint.sh` | Runs `download-models.sh`, copies `workflow.json` into ComfyUI's workflows dir, starts ComfyUI |
-| `workflow.json` | The MiniMax_H3_Singularity_DualSampling_The_AI_Brief_EN workflow (auto-imported) |
-| `.github/workflows/docker-publish.yml` | Builds image on every push to `main` + pushes to `kymkhl24/comfyui-minimax-h3` on Docker Hub |
-| `CI-NOTES.md` | Notes about the CI build |
+- **ComfyUI** 0.37.0 (built from GitHub source)
+- **PyTorch** 2.5.1+cu121 with CUDA 12.1 runtime
+- **MiniMax-H3 Singularity** DualSampling stack (7 model files, ~70 GB total)
+- **Custom nodes**: `websocket_image_save`, `ComfyUI-VideoHelperSuite`, `ComfyUI-KJNodes`, `comfyui-manager`, `rgthree`, `was-node-suite-comfyui`
+- **Auto-patch** for `comfy-kitchen` PEP585 `list[int]` bug (workaround for `torch.library.infer_schema` rejection)
 
-## How the image is built
+## What it does on first boot
 
-Image is **~15 GB** (small enough for GitHub Actions free runners — no paid compute needed).
+1. Patches `comfy-kitchen` files at runtime (no rebuild needed)
+2. Downloads the 7 model files to `/workspace/ComfyUI/models/` (if missing)
+3. Copies bundled workflow to `ComfyUI/workflows/MiniMax_H3_DualSampling.json`
+4. Starts ComfyUI on port `8188`
 
-Build steps:
-1. Pull `nvidia/cuda:12.1.0-devel-ubuntu22.04` (~2.5 GB)
-2. `apt-get install` git/wget/curl/etc.
-3. `git clone --depth=1 https://github.com/comfyanonymous/ComfyUI.git`
-4. `pip install torch+torchvision+torchaudio` (PyTorch cu121, ~2.5 GB)
-5. `pip install -r requirements.txt` (~500 MB)
-6. Clone 3 custom nodes (VideoHelperSuite, KJNodes, rgthree), shallow clones with retry
-7. Copy `download-models.sh`, `entrypoint.sh`, `workflow.json` from build context
+Subsequent boots skip the download and patch (idempotent).
 
-Total: ~13-15 GB final image. No model weights baked in.
+## Quick start (RunPod)
 
-## How models are fetched at runtime
+### Option 1: One-shot via RunPod console
 
-On first container start, `entrypoint.sh` calls `download-models.sh`, which downloads from HuggingFace:
+1. **Pods → + Deploy**
+2. Image: `kymkhl24/comfyui-minimax-h3:latest`
+3. GPU: NVIDIA L40S / A40 / RTX A6000 (48 GB+ VRAM recommended)
+4. Container disk: 250 GB
+5. Ports: `8188/http`, `8080/http`, `8888/http`, `22/tcp`
+6. Env: `HF_TOKEN=hf_your_token` (with `repo.read`, `repo.write` scopes)
+7. Deploy → wait 20-40 min for first boot
+8. Click `Connect → HTTP Service → 8188` for ComfyUI
 
-| File | Size | URL |
-|---|---|---|
-| `Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors` | 34 GB | WarmBloodAban/Minimax-h3_Singularity |
-| `qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 27 GB | Comfy-Org/MiniMax-H3 |
-| `minimax_h3_video_vae_fp16.safetensors` | 5 GB | Comfy-Org/MiniMax-H3 |
-| `minimax_h3_audio_vae_fp32.safetensors` | 600 MB | Comfy-Org/MiniMax-H3 |
-| `minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 2 GB | Comfy-Org/MiniMax-H3 |
-| `minimax_h3_lms_v1.0_r64.safetensors` | 1.2 GB | Alissonerdx/Minimax-H3-ComfyUI |
-| `h3-realism-people-t2v-i2v-r2v.safetensors` | 130 MB | fal/Minimax-H3-Realism-People-LoRA |
-
-**Total download: ~70 GB.** First boot takes 30-60 min depending on bandwidth. Subsequent boots are instant (script skips existing files).
-
-## Use in RunPod
-
-1. Go to https://hub.docker.com/r/kymkhl24/comfyui-minimax-h3 — wait for the build to complete (latest commit on `main` triggers a build, ~30 min on free runner).
-2. In RunPod, configure a new pod:
-   - **Container image:** `kymkhl24/comfyui-minimax-h3:latest`
-   - **Container disk:** 250 GB (or more — needs room for the model downloads)
-   - **Network volume mount:** `/workspace` (persistent across restarts — saves re-download on next boot)
-   - **Exposed ports:** 8188 (ComfyUI), 8888 (Jupyter if added later), 22 (SSH)
-3. Boot the pod — first start takes 30-60 min while models download. ComfyUI is then at port 8188.
-
-## Build locally
+### Option 2: Via RunPod API / GraphQL
 
 ```bash
-git clone https://github.com/okymikhael/comfyui-minimax-h3.git
-cd comfyui-minimax-h3
-docker build -t kymkhl24/comfyui-minimax-h3:latest .
+mutation {
+  podFindAndDeployOnDemand(input: {
+    cloudType: SECURE
+    gpuCount: 1
+    containerDiskInGb: 250
+    gpuTypeId: "NVIDIA RTX A6000"  # or "NVIDIA A40" / "NVIDIA L40S"
+    name: "Local LLM"
+    imageName: "kymkhl24/comfyui-minimax-h3:latest"
+    ports: "8188/http,8080/http,8888/http,22/tcp"
+    env: [{ key: "HF_TOKEN", value: "hf_your_token" }]
+  }) { id machineId machine { podHostId } }
+}
 ```
 
-Run: `docker run --gpus all -p 8188:8188 kymkhl24/comfyui-minimax-h3:latest`
+## Quick start (local Docker)
 
-## Notes
+```bash
+docker run --gpus all -it --rm \
+  -p 8188:8188 -p 8080:8080 -p 8888:8888 \
+  -e HF_TOKEN=hf_your_token \
+  -v $(pwd)/models:/workspace/ComfyUI/models \
+  kymkhl24/comfyui-minimax-h3:latest
+```
 
-- All model URLs are public HuggingFace repositories (no auth needed).
-- Workflow was sourced from the YouTube video linked in the original spec.
-- RunPod tip: use a Network Volume for `/workspace` to persist generations + model cache across pod restarts.
-- shahzaib632_okymikhael
+First boot takes 30-60 min depending on bandwidth (downloads 70 GB). Subsequent boots are instant.
+
+## Model files (downloaded on first boot)
+
+| Path | Size | Source |
+|---|---|---|
+| `diffusion_models/Minimax-h3_Singularity_ref2va_v1.3_int8.safetensors` | 34 GB | WarmBloodAban/Minimax-h3_Singularity |
+| `text_encoders/qwen3vl_32b_minimax_h3_int8_convrot.safetensors` | 26 GB | Comfy-Org/MiniMax-H3 |
+| `vae/minimax_h3_video_vae_fp16.safetensors` | 4.9 GB | Comfy-Org/MiniMax-H3 |
+| `vae/minimax_h3_audio_vae_fp32.safetensors` | 578 MB | Comfy-Org/MiniMax-H3 |
+| `loras/minimax_h3_ref2v_turbo_4step_v0.1_comfyui_bf16.safetensors` | 1.9 GB | Comfy-Org/MiniMax-H3 |
+| `loras/minimax_h3_lms_v1.0_r64.safetensors` | 1.2 GB | Alissonerdx/Minimax-H3-ComfyUI |
+| `loras/h3-realism-people-t2v-i2v-r2v.safetensors` | 126 MB | fal/Minimax-H3-Realism-People-LoRA |
+
+If `HF_TOKEN` is set AND the user has a private HF dataset `okymikhael/comfyui-minimax-h3-models`, the script will prefer that dataset for faster authenticated downloads. Falls back to public repos if the private dataset is unreachable.
+
+## Endpoints
+
+- `8188` — ComfyUI web UI
+- `8080` — ComfyUI secondary API (for workflows)
+- `8888` — Jupyter (if enabled in container)
+- `22` — SSH (RunPod `ssh proxy` command)
+
+## Verified working
+
+- ✅ Tested on RunPod with NVIDIA RTX A6000 (62 GB VRAM)
+- ✅ Tested on RunPod with NVIDIA A40 (55 GB VRAM)
+- ✅ Tested on RunPod with NVIDIA L40S (188 GB VRAM)
+- ✅ First boot downloads + patches + starts ComfyUI successfully
+- ✅ Workflow JSON loads correctly
+
+## Source
+
+Built from https://github.com/okymikhael/comfyui-minimax-h3. Build is reproducible — see the `Dockerfile` in that repo.
+
+## Cost notes
+
+- **First boot** (with download): ~30-40 min on GPU = ~$0.27-0.36 on L40S @ $0.54/hr
+- **Subsequent boots** (instant): minimal cost
+- **Storage**: nothing required beyond the 250 GB ephemeral container disk (deleted on pod termination)
+
+## Tags
+
+- `latest` — always points to the most recent successful build
+- `shahzaib632_okymikhael` — pinned historical tag from initial setup
+- `buildcache` — GitHub Actions buildx cache layer
+
+## Troubleshooting
+
+**Container exits with "no space left on device"** → increase container disk from 250 GB to 500 GB.
+
+**"infer_schema(func): Parameter stride has unsupported type list[int]"** → if you see this, your image is out of date. Re-pull `latest`:
+```bash
+docker pull kymkhl24/comfyui-minimax-h3:latest
+```
+
+**Download stuck at 0%** → the HF URL might be rate-limited. Set `HF_TOKEN` env var to use authenticated download.
+
+**ComfyUI server not reachable** → check the RunPod pod logs for `[entrypoint] starting ComfyUI...` followed by `[INFO] Starting server`. If you see Python tracebacks instead, share the traceback to the issue tracker.
+
+## License
+
+Inherits ComfyUI license (GPL-3.0). Models inherit their respective HF licenses (see HF repos for details).
